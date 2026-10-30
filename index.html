@@ -220,13 +220,12 @@
     // ==================== 尺寸 ====================
     function defaultSize() {
       const w = window.innerWidth;
-      if (w < 360) return Math.round(w * 0.42);
-      if (w < 768) return Math.round(w * 0.30);
-      return 240;
+      if (w < 768) return Math.round(w * 0.60);   // 手机：60% 屏宽（超过半个屏幕，动作看得清）
+      return 300;                                  // 桌面
     }
     function applySize() {
       document.documentElement.style.setProperty('--pet-size', defaultSize() + 'px');
-      document.documentElement.style.setProperty('--bubble-font', Math.max(12, Math.round(defaultSize() * 0.065)) + 'px');
+      document.documentElement.style.setProperty('--bubble-font', Math.max(14, Math.round(defaultSize() * 0.06)) + 'px');
     }
 
     // ==================== 工具（与 shared/pickers.ts 同源） ====================
@@ -314,27 +313,44 @@
       pickNext();
     }
 
-    // ==================== 移动系统（简化） ====================
+    // ==================== 移动系统（水平/垂直/对角，全屏活动） ====================
     function tryMove() {
       const mv = pick(ANIMS.moves);
       const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--pet-size')) / 240;
       const minD = mv.minDist * scale, maxD = mv.maxDist * scale;
       const dist = minD + Math.random() * (maxD - minD);
-      const dir = Math.random() < 0.5 ? -1 : 1;
       const rect = pet.getBoundingClientRect();
-      const margin = 12;
+      const margin = 8;
       const maxLeft = window.innerWidth - rect.width - margin;
-      let targetLeft = rect.left + dir * dist;
-      targetLeft = Math.max(margin, Math.min(maxLeft, targetLeft));
-      if (Math.abs(targetLeft - rect.left) < 10) return false;  // 几乎没动，改随机动作
-      // 朝向 = 移动方向
-      facing = targetLeft > rect.left ? 'right' : 'left';
+      const maxTop = window.innerHeight - rect.height - margin;
+
+      // 随机移动模式：水平 / 垂直 / 对角
+      const mode = Math.random();
+      const dirH = Math.random() < 0.5 ? -1 : 1;
+      const dirV = Math.random() < 0.5 ? -1 : 1;
+      let dx = 0, dy = 0;
+      if (mode < 0.45) {
+        dx = dirH * dist;                          // 水平移动
+      } else if (mode < 0.75) {
+        dy = dirV * dist * 0.6;                    // 垂直移动（屏幕高度有限，距离略短）
+      } else {
+        dx = dirH * dist * 0.7;                    // 对角移动
+        dy = dirV * dist * 0.7;
+      }
+
+      let targetLeft = Math.max(margin, Math.min(maxLeft, rect.left + dx));
+      let targetTop = Math.max(margin, Math.min(maxTop, rect.top + dy));
+      if (Math.abs(targetLeft - rect.left) + Math.abs(targetTop - rect.top) < 12) return false;  // 几乎没动，改随机动作
+
+      // 朝向：水平位移决定（垂直移动保持原朝向）
+      if (Math.abs(targetLeft - rect.left) > 12) {
+        facing = targetLeft > rect.left ? 'right' : 'left';
+      }
+
       // 播放移动动画，并同步移动
       moveToken++;
       const token = moveToken;
-      const mvName = mv.name;
-      switchTo(mvName, true);
-      // 移动过渡：等视频拿到时长后，用同样时长过渡
+      switchTo(mv.name, true);
       const el = activeVideo();
       const doMove = () => {
         if (token !== moveToken) return;
@@ -342,6 +358,7 @@
         pet.style.setProperty('--move-dur', dur + 'ms');
         pet.classList.add('pet-moving');
         pet.style.left = targetLeft + 'px';
+        pet.style.top = targetTop + 'px';
         setTimeout(() => {
           if (token === moveToken) pet.classList.remove('pet-moving');
         }, dur + 50);
@@ -425,8 +442,8 @@
       menu.innerHTML = '';
       const items = [
         { label: '摸摸头', fn: () => { speak(pick(CLICK_LINES)); switchTo(pick(ANIMS.clicks, anim), true); } },
-        { label: '换个动作', fn: () => { switchTo(pickCategoryAction(ANIMS.categories, ANIMS.idle, facing, anim), true); } },
-        { label: '待机', fn: () => switchTo(ANIMS.idle[0], true) },
+        { label: '换个动作', fn: () => { const n = pickCategoryAction(ANIMS.categories, ANIMS.idle, facing, anim); speak('变——' + n); switchTo(n, true); } },
+        { label: '待机', fn: () => { speak('休息一下～'); switchTo(ANIMS.idle[0], true); } },
       ];
       items.forEach((it) => {
         const b = document.createElement('button');
