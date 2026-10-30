@@ -220,7 +220,7 @@
     // ==================== 尺寸 ====================
     function defaultSize() {
       const w = window.innerWidth;
-      if (w < 768) return Math.round(w * 0.60);   // 手机：60% 屏宽（超过半个屏幕，动作看得清）
+      if (w < 768) return Math.round(w * 0.90);   // 手机：90% 屏宽（现在的150%，动作完全看清）
       return 300;                                  // 桌面
     }
     function applySize() {
@@ -264,8 +264,10 @@
       el.style.transform = facing === 'right' ? 'scaleX(-1)' : '';
     }
 
+    let switchToken = 0;
     function switchTo(name, isOnce) {
       anim = name;
+      const token = ++switchToken;
       const url = 'webm/' + encodeURI(name) + '.webm';
       const el = backVideo();
       const old = activeVideo();
@@ -273,12 +275,28 @@
       el.loop = !isOnce;
       el.onended = isOnce ? handleEnded : null;
       applyFacing(el);
-      old.classList.remove('is-front');
-      el.classList.add('is-front');
-      front = front === 0 ? 1 : 0;
-      el.currentTime = 0;
-      const p = el.play();
-      if (p) p.catch(() => {});
+
+      // 等新视频能播第一帧后再切换：避免移动端加载慢导致旧视频已淡出、新视频还没画面 → 宠物短暂消失
+      const doSwap = () => {
+        if (token !== switchToken) return;   // 已被更新的切换覆盖，丢弃
+        old.classList.remove('is-front');
+        el.classList.add('is-front');
+        front = front === 0 ? 1 : 0;
+        const p = el.play();
+        if (p) p.catch(() => {});
+      };
+
+      if (el.readyState >= 3) {
+        doSwap();   // 已缓存/已就绪：立即切换
+      } else {
+        el.addEventListener('canplay', doSwap, { once: true });
+        // 加载失败：跳过该动画继续调度，避免卡死在空白
+        el.addEventListener('error', () => {
+          if (token !== switchToken) return;
+          el.removeEventListener('canplay', doSwap);
+          if (isOnce) handleEnded();
+        }, { once: true });
+      }
     }
 
     // ==================== 动画调度 ====================
