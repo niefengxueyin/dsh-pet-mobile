@@ -508,18 +508,6 @@
     }
 
     // ==================== 启动 ====================
-    function preload() {
-      // 预加载交互关键视频（待机/拖拽/点击），切换时命中缓存、立即就绪
-      [...ANIMS.idle, ...ANIMS.drag, ...ANIMS.clicks].forEach((n) => {
-        const v = document.createElement('video');
-        v.muted = true;
-        v.playsInline = true;
-        v.preload = 'auto';
-        v.src = 'webm/' + encodeURI(n) + '.webm';
-        v.load();
-      });
-    }
-
     function init() {
       applySize();
       buildMenu();
@@ -536,10 +524,12 @@
       el.onended = null;
       applyFacing(el);
       el.classList.add('is-front');
-      el.play().catch(() => {});
-      // 定时触发随机动作 + 预加载交互视频
+      const p = el.play();
+      if (p) p.catch(() => {});
+      // 兜底：确保 canplay 后一定在播（防初始 play 被移动端延迟）
+      el.addEventListener('canplay', () => { if (el.paused) el.play().catch(() => {}); }, { once: true });
+      // 定时触发随机动作
       scheduleNext();
-      preload();
       // 开场白
       setTimeout(() => speak('大肥鱼上线啦！'), 800);
     }
