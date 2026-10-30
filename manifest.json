@@ -1,0 +1,17 @@
+{
+  "name": "蓝色大肥鱼 · 桌宠",
+  "short_name": "大肥鱼",
+  "description": "住在手机屏幕角落的桌面宠物，带待机、随机小动作、转向、自主走位、点击回应和拖拽。",
+  "lang": "zh-CN",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "logo.png", "sizes": "256x256", "type": "image/png", "purpose": "any" }
+  ]
+}

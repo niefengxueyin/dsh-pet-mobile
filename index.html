@@ -1,0 +1,496 @@
+<!--
+  蓝色大肥鱼 · 桌宠（手机动画版）
+  基于 dsh-pet (https://github.com/PC2005-cloud/dsh-pet) 的动画资源与动画调度逻辑移植。
+  Copyright (c) 2026 PC2005-cloud, MIT License.
+  完整许可见同目录 LICENSE 文件。
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>蓝色大肥鱼 · 桌宠（手机动画版）</title>
+  <meta name="description" content="住在手机屏幕角落的桌面宠物，带待机、随机小动作、转向、自主走位、点击回应和拖拽抛掷。">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <style>
+    :root {
+      --pet-size: 200px;
+      --bubble-font: 13px;
+    }
+    * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    /* 宠物根：绝对定位，位置由 JS 控制 */
+    #pet {
+      position: fixed;
+      z-index: 1000;
+      pointer-events: auto;
+      touch-action: none;           /* 拖拽时不触发页面滚动 */
+      cursor: grab;
+    }
+    #pet.pet-dragging { cursor: grabbing; }
+    #pet.pet-moving { transition: left var(--move-dur, 0s) linear, top var(--move-dur, 0s) linear; }
+
+    .pet-stage {
+      position: relative;
+      width: var(--pet-size);
+      height: calc(var(--pet-size) * 9 / 16);
+      pointer-events: none;
+    }
+    video.pet-video {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+    }
+    video.pet-video.is-front { opacity: 1; }
+
+    /* 说话气泡 */
+    .pet-bubble {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: calc(100% - var(--pet-size) * 0.05);
+      width: max-content;
+      max-width: min(calc(var(--bubble-font) * 16), 78vw);
+      padding: calc(var(--bubble-font) * 0.6) calc(var(--bubble-font) * 0.8);
+      border-radius: calc(var(--bubble-font) * 0.8);
+      background: rgba(255, 255, 255, 0.94);
+      color: #2b2b2b;
+      font-size: var(--bubble-font);
+      line-height: 1.5;
+      white-space: normal;
+      overflow-wrap: break-word;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      pointer-events: none;
+      z-index: 3;
+    }
+    .pet-bubble::after {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 100%;
+      transform: translateX(-50%);
+      border: calc(var(--bubble-font) * 0.4) solid transparent;
+      border-top-color: rgba(255, 255, 255, 0.94);
+    }
+    .pet-bubble.is-on { opacity: 1; }
+
+    /* 菜单 */
+    .pet-menu {
+      position: fixed;
+      z-index: 1001;
+      background: #fff;
+      border-radius: 12px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+      padding: 6px;
+      min-width: 150px;
+      font-size: 15px;
+    }
+    .pet-menu-item {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 12px 14px;
+      border: none;
+      background: none;
+      border-radius: 8px;
+      color: #333;
+      font-size: 15px;
+      font-family: inherit;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .pet-menu-item:active { background: rgba(0, 0, 0, 0.08); }
+    .pet-menu-sep { height: 1px; background: rgba(0, 0, 0, 0.08); margin: 4px 6px; }
+
+    /* 隐藏圆点 */
+    .pet-hidden-dot {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(79, 156, 232, 0.6);
+      cursor: pointer;
+      z-index: 1000;
+      box-shadow: 0 0 0 5px rgba(79, 156, 232, 0.2);
+      touch-action: manipulation;
+    }
+
+    @media (hover: hover) {
+      .pet-menu-item:hover { background: rgba(0, 0, 0, 0.06); }
+    }
+  </style>
+</head>
+<body>
+  <div id="pet">
+    <div id="bubble" class="pet-bubble"></div>
+    <div class="pet-stage">
+      <video id="videoA" class="pet-video" muted playsinline></video>
+      <video id="videoB" class="pet-video" muted playsinline></video>
+    </div>
+  </div>
+  <div id="menu" class="pet-menu" hidden></div>
+  <div id="hiddenDot" class="pet-hidden-dot" title="大肥鱼（点击恢复）" hidden></div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ==================== 动画配置（与 dsh-pet@0.3.8 config.jsonc 一致） ====================
+    const ANIMS = {
+      idle: ['待机呼吸休闲'],
+      turn: ['东张西望'],
+      drag: ['被鼠标拖拽悬空反馈'],
+      clicks: ['点击回应-开心跃动', '点击回应-害羞惊讶', '点击回应-傲娇生气', '点击回应-挠痒咯咯笑', '点击回应-元气挥手'],
+      moves: [
+        { name: '螃蟹走路', minDist: 60, maxDist: 240 },
+        { name: '原地漂浮踏步', minDist: 40, maxDist: 120 },
+        { name: '原地左转奔跑', minDist: 120, maxDist: 320 },
+      ],
+      categories: [
+        { id: '小动作', weight: 20, actions: [
+          '悠闲哼歌', '超大伸懒腰', '原地敲击桌面互动', '原地重力下蹲压缩', '哈欠连天', '原地小憩沉眠',
+          '女仆屈膝礼仪', '被吓一跳', '小幅度原地360度旋转展示', '偷吃零食被抓住', '用鲸鱼尾巴拍打地面',
+          '打瞌睡被惊醒', '照镜子', '整体换装试色', '轻快记录', '写代码', '摇扇纳凉', '晨间刷牙'
+        ] },
+        { id: '玩耍', weight: 20, actions: [
+          '原地专心玩魔方', '原地蹲下玩玩具汽车', '鲸鱼吐泡泡特效', '原地跳跃抓碎头顶物品', '玩游戏气急败坏',
+          '玩水枪', '小提琴演奏', '蓝鲸现世', '优雅女仆舞', '轻快摇摆舞', '可爱宅舞', '吹气球', '动物环绕',
+          '放风筝', '拆礼物', '变鸽子', '扑克魔术', '抽陀螺', '吹笛子', '蝴蝶蜜蜂环绕头顶开花', '撸猫',
+          '凭空生花', '骑木马', '三球抛接', '踢毽子', '下五子棋', '荡秋千'
+        ] },
+        { id: '吃什么', weight: 16, actions: [
+          '吃白饭', '大口吃零食', '吃Token', '吃早餐', '吃午餐', '吃晚餐', '吃冰淇淋融化', '吃大闸蟹',
+          '吃糖葫芦', '吃长寿面', '吃西瓜', '涮火锅'
+        ] },
+        { id: '时节', weight: 14, actions: [
+          '被落叶淹没', '中秋赏月吃月饼', '堆雪人', '放烟花', '吃粽子', '吃年糕', '吃青团', '吃腊八粥',
+          '吃重阳糕', '收红包', '写福字', '穿针乞巧', '舞狮头', '讨糖南瓜灯', '插茱萸赏菊', '放河灯',
+          '萌化小幽灵', '装点圣诞树', '放孔明灯', '吃汤圆', '吃饺子'
+        ] },
+        { id: '文字', weight: 10, noMirror: true, actions: ['是啊，吃什么', '深度思考碎碎念'] },
+      ],
+    };
+    const WEIGHTS = { idle: 10, turn: 5, move: 5 };
+
+    // ==================== 台词 ====================
+    const CLICK_LINES = ['怎么啦？', '找我干嘛～', '哼！', '嘻嘻！', '在呢在呢！'];
+    const DRAG_LINES = ['哇——轻点！', '起飞咯！', '放我下来！', '晕鱼了……'];
+
+    // ==================== DOM ====================
+    const pet = document.getElementById('pet');
+    const stage = pet.querySelector('.pet-stage');
+    const videoA = document.getElementById('videoA');
+    const videoB = document.getElementById('videoB');
+    const bubble = document.getElementById('bubble');
+    const menu = document.getElementById('menu');
+    const hiddenDot = document.getElementById('hiddenDot');
+
+    const isTouch = window.matchMedia('(hover: none)').matches;
+
+    // ==================== 状态 ====================
+    let anim = ANIMS.idle[0];
+    let facing = 'left';                 // 'left' | 'right'
+    let dragging = false;
+    let hidden = false;
+    let front = 0;                       // 0 = A 前台, 1 = B 前台
+    let bubbleTimer = null;
+    let longPressTimer = null;
+    let moveToken = 0;
+
+    // ==================== 尺寸 ====================
+    function defaultSize() {
+      const w = window.innerWidth;
+      if (w < 360) return Math.round(w * 0.42);
+      if (w < 768) return Math.round(w * 0.30);
+      return 240;
+    }
+    function applySize() {
+      document.documentElement.style.setProperty('--pet-size', defaultSize() + 'px');
+      document.documentElement.style.setProperty('--bubble-font', Math.max(12, Math.round(defaultSize() * 0.065)) + 'px');
+    }
+
+    // ==================== 工具（与 shared/pickers.ts 同源） ====================
+    function pick(pool, exclude) {
+      const entries = exclude ? pool.filter((n) => n !== exclude) : pool;
+      const src = entries.length ? entries : pool;
+      return src[Math.floor(Math.random() * src.length)];
+    }
+    function pickWeightedCategory(categories, facingNow) {
+      const cats = categories.filter((c) => c.actions.length > 0);
+      const filtered = cats.filter((c) => !(c.noMirror && facingNow === 'right'));
+      const eligible = filtered.length ? filtered : cats;
+      const totalW = eligible.reduce((s, c) => s + c.weight, 0) || 1;
+      let t = Math.random() * totalW;
+      for (const c of eligible) { t -= c.weight; if (t <= 0) return c; }
+      return eligible[eligible.length - 1];
+    }
+    function pickCategoryAction(categories, idlePool, facingNow, current) {
+      const cat = pickWeightedCategory(categories, facingNow);
+      if (!cat) return pick(idlePool, current);
+      return pick(cat.actions, current);
+    }
+    function rollKind(roll, w) {
+      const topEnd = (w.idle + w.turn + w.move) / 100;
+      if (roll < w.idle / 100) return 'idle';
+      if (roll < (w.idle + w.turn) / 100) return 'turn';
+      if (roll < topEnd) return 'move';
+      return 'action';
+    }
+
+    // ==================== 视频双缓冲播放 ====================
+    function activeVideo() { return front === 0 ? videoA : videoB; }
+    function backVideo()   { return front === 0 ? videoB : videoA; }
+
+    function applyFacing(el) {
+      el.style.transform = facing === 'right' ? 'scaleX(-1)' : '';
+    }
+
+    function switchTo(name, isOnce) {
+      anim = name;
+      const url = 'webm/' + encodeURI(name) + '.webm';
+      const el = backVideo();
+      const old = activeVideo();
+      el.src = url;
+      el.loop = !isOnce;
+      el.onended = isOnce ? handleEnded : null;
+      applyFacing(el);
+      old.classList.remove('is-front');
+      el.classList.add('is-front');
+      front = front === 0 ? 1 : 0;
+      el.currentTime = 0;
+      const p = el.play();
+      if (p) p.catch(() => {});
+    }
+
+    // ==================== 动画调度 ====================
+    function pickNext() {
+      const roll = Math.random();
+      const k = rollKind(roll, WEIGHTS);
+      if (k === 'idle') {
+        switchTo(pick(ANIMS.idle, anim), true);
+      } else if (k === 'turn') {
+        switchTo(pick(ANIMS.turn, anim), true);
+      } else if (k === 'move') {
+        if (!tryMove()) {
+          switchTo(pickCategoryAction(ANIMS.categories, ANIMS.idle, facing, anim), true);
+        }
+      } else {
+        switchTo(pickCategoryAction(ANIMS.categories, ANIMS.idle, facing, anim), true);
+      }
+    }
+
+    function handleEnded() {
+      if (dragging) return;
+      if (ANIMS.turn.includes(anim)) {
+        facing = facing === 'left' ? 'right' : 'left';
+        const el = activeVideo();
+        applyFacing(el);
+      }
+      if (ANIMS.drag.includes(anim) || ANIMS.clicks.includes(anim)) {
+        // 互动动画播完 → 回待机（播一遍后再掷骰）
+        switchTo(pick(ANIMS.idle, anim), true);
+        return;
+      }
+      pickNext();
+    }
+
+    // ==================== 移动系统（简化） ====================
+    function tryMove() {
+      const mv = pick(ANIMS.moves);
+      const scale = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--pet-size')) / 240;
+      const minD = mv.minDist * scale, maxD = mv.maxDist * scale;
+      const dist = minD + Math.random() * (maxD - minD);
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      const rect = pet.getBoundingClientRect();
+      const margin = 12;
+      const maxLeft = window.innerWidth - rect.width - margin;
+      let targetLeft = rect.left + dir * dist;
+      targetLeft = Math.max(margin, Math.min(maxLeft, targetLeft));
+      if (Math.abs(targetLeft - rect.left) < 10) return false;  // 几乎没动，改随机动作
+      // 朝向 = 移动方向
+      facing = targetLeft > rect.left ? 'right' : 'left';
+      // 播放移动动画，并同步移动
+      moveToken++;
+      const token = moveToken;
+      const mvName = mv.name;
+      switchTo(mvName, true);
+      // 移动过渡：等视频拿到时长后，用同样时长过渡
+      const el = activeVideo();
+      const doMove = () => {
+        if (token !== moveToken) return;
+        const dur = (el.duration && isFinite(el.duration)) ? el.duration * 1000 : 2500;
+        pet.style.setProperty('--move-dur', dur + 'ms');
+        pet.classList.add('pet-moving');
+        pet.style.left = targetLeft + 'px';
+        setTimeout(() => {
+          if (token === moveToken) pet.classList.remove('pet-moving');
+        }, dur + 50);
+      };
+      if (el.duration && isFinite(el.duration)) doMove();
+      else el.addEventListener('loadedmetadata', doMove, { once: true });
+      return true;
+    }
+
+    // ==================== 说话 ====================
+    function speak(text) {
+      bubble.textContent = text;
+      bubble.classList.add('is-on');
+      if (bubbleTimer) clearTimeout(bubbleTimer);
+      bubbleTimer = setTimeout(() => bubble.classList.remove('is-on'), 2400);
+    }
+
+    // ==================== 交互：点击 / 拖拽 / 长按 / 右键 ====================
+    const drag = { down: false, dragging: false, startX: 0, startY: 0, origLeft: 0, origTop: 0 };
+
+    function onPointerDown(e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      const rect = pet.getBoundingClientRect();
+      drag.down = true;
+      drag.dragging = false;
+      drag.startX = e.clientX; drag.startY = e.clientY;
+      drag.origLeft = rect.left; drag.origTop = rect.top;
+      // 固定 pet 到 left/top 坐标系
+      pet.style.left = rect.left + 'px';
+      pet.style.top = rect.top + 'px';
+      pet.style.right = 'auto';
+      pet.style.bottom = 'auto';
+      // 触摸长按 → 菜单
+      if (e.pointerType === 'touch') {
+        clearTimeout(longPressTimer);
+        longPressTimer = setTimeout(() => {
+          if (drag.down && !drag.dragging) { openMenu(e.clientX, e.clientY); drag.down = false; }
+        }, 550);
+      }
+    }
+    function onPointerMove(e) {
+      if (!drag.down) return;
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+      if (!drag.dragging && Math.abs(dx) + Math.abs(dy) > 6) {
+        drag.dragging = true;
+        dragging = true;
+        pet.classList.add('pet-dragging');
+        clearTimeout(longPressTimer);
+        switchTo(ANIMS.drag[0], false);   // 拖拽动画循环
+      }
+      if (drag.dragging) {
+        pet.style.left = (drag.origLeft + dx) + 'px';
+        pet.style.top = (drag.origTop + dy) + 'px';
+      }
+    }
+    function onPointerUp() {
+      if (!drag.down) return;
+      clearTimeout(longPressTimer);
+      const wasDragging = drag.dragging;
+      drag.down = false;
+      drag.dragging = false;
+      dragging = false;
+      pet.classList.remove('pet-dragging');
+      if (wasDragging) {
+        speak(pick(DRAG_LINES));
+        switchTo(pick(ANIMS.idle), true);   // 松手回待机
+      } else {
+        // 点击回应
+        speak(pick(CLICK_LINES));
+        switchTo(pick(ANIMS.clicks, anim), true);
+      }
+    }
+    function onContextMenu(e) {
+      e.preventDefault();
+      openMenu(e.clientX, e.clientY);
+    }
+
+    // ==================== 菜单 ====================
+    function buildMenu() {
+      menu.innerHTML = '';
+      const items = [
+        { label: '摸摸头', fn: () => { speak(pick(CLICK_LINES)); switchTo(pick(ANIMS.clicks, anim), true); } },
+        { label: '换个动作', fn: () => { switchTo(pickCategoryAction(ANIMS.categories, ANIMS.idle, facing, anim), true); } },
+        { label: '待机', fn: () => switchTo(ANIMS.idle[0], true) },
+      ];
+      items.forEach((it) => {
+        const b = document.createElement('button');
+        b.className = 'pet-menu-item'; b.textContent = it.label;
+        b.onclick = () => { it.fn(); closeMenu(); };
+        menu.appendChild(b);
+      });
+      const sep = document.createElement('div'); sep.className = 'pet-menu-sep'; menu.appendChild(sep);
+      const hideBtn = document.createElement('button');
+      hideBtn.className = 'pet-menu-item'; hideBtn.textContent = '隐藏';
+      hideBtn.onclick = () => { setHidden(true); closeMenu(); };
+      menu.appendChild(hideBtn);
+    }
+    function openMenu(x, y) {
+      const mw = 160, mh = 220;
+      menu.style.left = Math.max(4, Math.min(x, window.innerWidth - mw)) + 'px';
+      menu.style.top = Math.max(4, Math.min(y, window.innerHeight - mh)) + 'px';
+      menu.hidden = false;
+    }
+    function closeMenu() { menu.hidden = true; }
+    function setHidden(v) {
+      hidden = v;
+      pet.style.display = v ? 'none' : '';
+      hiddenDot.hidden = !v;
+    }
+
+    // ==================== 事件绑定 ====================
+    function bind() {
+      pet.addEventListener('pointerdown', onPointerDown);
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      pet.addEventListener('contextmenu', onContextMenu);
+      document.addEventListener('pointerdown', (e) => {
+        if (!menu.hidden && !menu.contains(e.target)) closeMenu();
+      });
+      hiddenDot.addEventListener('click', () => setHidden(false));
+      window.addEventListener('resize', applySize);
+    }
+
+    // ==================== 启动 ====================
+    function init() {
+      applySize();
+      buildMenu();
+      bind();
+      // 初始位置：右下角
+      const size = defaultSize();
+      pet.style.right = '12px';
+      pet.style.bottom = '12px';
+      // 开播待机（循环）
+      anim = ANIMS.idle[0];
+      const el = activeVideo();
+      el.src = 'webm/' + encodeURI(anim) + '.webm';
+      el.loop = false;
+      el.onended = handleEnded;
+      applyFacing(el);
+      el.classList.add('is-front');
+      el.play().catch(() => {});
+      // 开场白
+      setTimeout(() => speak('大肥鱼上线啦！'), 800);
+    }
+
+    init();
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  })();
+  </script>
+</body>
+</html>
