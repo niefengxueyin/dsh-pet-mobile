@@ -432,7 +432,7 @@
         dragging = true;
         pet.classList.add('pet-dragging');
         clearTimeout(longPressTimer);
-        switchTo(ANIMS.drag[0], false);   // 拖拽动画循环
+        // 拖动时保持当前动画、不切视频（移动端切换视频易导致画面消失）
       }
       if (drag.dragging) {
         pet.style.left = (drag.origLeft + dx) + 'px';
@@ -449,7 +449,7 @@
       pet.classList.remove('pet-dragging');
       if (wasDragging) {
         speak(pick(DRAG_LINES));
-        switchTo(pick(ANIMS.idle), false);   // 松手回待机（循环）
+        // 松手保持当前动画、不切视频（避免移动端切换导致消失）
       } else {
         // 点击回应
         speak(pick(CLICK_LINES));
