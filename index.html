@@ -300,11 +300,21 @@
     }
 
     // ==================== 动画调度 ====================
+    let nextTimer = null;
+
+    function scheduleNext() {
+      clearTimeout(nextTimer);
+      nextTimer = setTimeout(() => {
+        if (dragging) { scheduleNext(); return; }   // 拖动中先不切，延后
+        pickNext();
+      }, 5000 + Math.random() * 6000);
+    }
+
     function pickNext() {
       const roll = Math.random();
       const k = rollKind(roll, WEIGHTS);
       if (k === 'idle') {
-        switchTo(pick(ANIMS.idle, anim), true);
+        scheduleNext();                              // 保持待机循环，继续定时
       } else if (k === 'turn') {
         switchTo(pick(ANIMS.turn, anim), true);
       } else if (k === 'move') {
@@ -317,18 +327,14 @@
     }
 
     function handleEnded() {
-      if (dragging) return;
       if (ANIMS.turn.includes(anim)) {
         facing = facing === 'left' ? 'right' : 'left';
         const el = activeVideo();
         applyFacing(el);
       }
-      if (ANIMS.drag.includes(anim) || ANIMS.clicks.includes(anim)) {
-        // 互动动画播完 → 回待机（播一遍后再掷骰）
-        switchTo(pick(ANIMS.idle, anim), true);
-        return;
-      }
-      pickNext();
+      // 一次性动画播完 → 回待机（循环播放，保证宠物始终可见、不落空）
+      switchTo(ANIMS.idle[0], false);
+      scheduleNext();
     }
 
     // ==================== 移动系统（水平/垂直/对角，全屏活动） ====================
@@ -443,7 +449,7 @@
       pet.classList.remove('pet-dragging');
       if (wasDragging) {
         speak(pick(DRAG_LINES));
-        switchTo(pick(ANIMS.idle), true);   // 松手回待机
+        switchTo(pick(ANIMS.idle), false);   // 松手回待机（循环）
       } else {
         // 点击回应
         speak(pick(CLICK_LINES));
@@ -461,7 +467,7 @@
       const items = [
         { label: '摸摸头', fn: () => { speak(pick(CLICK_LINES)); switchTo(pick(ANIMS.clicks, anim), true); } },
         { label: '换个动作', fn: () => { const n = pickCategoryAction(ANIMS.categories, ANIMS.idle, facing, anim); speak('变——' + n); switchTo(n, true); } },
-        { label: '待机', fn: () => { speak('休息一下～'); switchTo(ANIMS.idle[0], true); } },
+        { label: '待机', fn: () => { speak('休息一下～'); switchTo(ANIMS.idle[0], false); } },
       ];
       items.forEach((it) => {
         const b = document.createElement('button');
@@ -502,6 +508,18 @@
     }
 
     // ==================== 启动 ====================
+    function preload() {
+      // 预加载交互关键视频（待机/拖拽/点击），切换时命中缓存、立即就绪
+      [...ANIMS.idle, ...ANIMS.drag, ...ANIMS.clicks].forEach((n) => {
+        const v = document.createElement('video');
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = 'auto';
+        v.src = 'webm/' + encodeURI(n) + '.webm';
+        v.load();
+      });
+    }
+
     function init() {
       applySize();
       buildMenu();
@@ -510,15 +528,18 @@
       const size = defaultSize();
       pet.style.right = '12px';
       pet.style.bottom = '12px';
-      // 开播待机（循环）
+      // 开播待机（循环播放，永不结束，保证宠物始终可见）
       anim = ANIMS.idle[0];
       const el = activeVideo();
       el.src = 'webm/' + encodeURI(anim) + '.webm';
-      el.loop = false;
-      el.onended = handleEnded;
+      el.loop = true;
+      el.onended = null;
       applyFacing(el);
       el.classList.add('is-front');
       el.play().catch(() => {});
+      // 定时触发随机动作 + 预加载交互视频
+      scheduleNext();
+      preload();
       // 开场白
       setTimeout(() => speak('大肥鱼上线啦！'), 800);
     }
